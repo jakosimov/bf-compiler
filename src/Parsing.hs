@@ -142,7 +142,7 @@ stringLiteralCharacter = choice $ charParsers ++ escCharParsers
         
   
 stringLiteral :: Parser String
-stringLiteral = 
+stringLiteral =
   between doubleQuote (many stringLiteralCharacter) doubleQuote
   |>> map (\str -> if length str == 2 then tail str else str)
   |>> concat
