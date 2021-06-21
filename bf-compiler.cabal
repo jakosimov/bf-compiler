@@ -1,8 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.34.4.
+-- This file has been generated from package.yaml by hpack version 0.33.0.
 --
 -- see: https://github.com/sol/hpack
+--
+-- hash: 7b4a48987bd3395ceb5dde5f45bf0f3ef6aa76ba1ef393108c35fbfe40261d3e
 
 name:           bf-compiler
 version:        0.1.0.0

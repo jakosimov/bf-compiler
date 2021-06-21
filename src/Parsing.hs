@@ -38,10 +38,10 @@ p1 `andThen` p2 = Parser $ \str ->
 (.>>.) = andThen
 
 (.>>) :: Parser a -> Parser b -> Parser a
-p1 .>> p2 = (p1 .>>. p2) |>> (\(a, b) -> a)
+p1 .>> p2 = (p1 .>>. p2) |>> fst
 
 (>>.) :: Parser a -> Parser b -> Parser b
-p1 >>. p2 = (p1 .>>. p2) |>> (\(a, b) -> b)
+p1 >>. p2 = (p1 .>>. p2) |>> snd
 
 eitherOr :: Parser a -> Parser a -> Parser a
 p1 `eitherOr` p2 = Parser $ \str ->
@@ -60,14 +60,14 @@ alwaysFailure :: String -> Parser a
 alwaysFailure error = Parser (\_ -> Left error)
 
 combineResults :: Parser [b] -> Parser [b] -> Parser [b]
-combineResults p1 p2 = (p1 `andThen` p2) |>> (\(a, b) -> a ++ b)
+combineResults p1 p2 = (p1 `andThen` p2) |>> uncurry (++)
 
 seqParse :: [Parser a] -> Parser [a]
 seqParse ps = foldr combineResults (alwaysSuccess []) ps'
   where ps' = map (|>> (:[])) ps 
 
 choice :: [Parser a] -> Parser a
-choice ps = foldl (<|>) (alwaysFailure errorMsg) ps 
+choice = foldl (<|>) (alwaysFailure errorMsg)
   where errorMsg = "Empty choice"
 
 anyOf :: [Char] -> Parser Char
@@ -91,7 +91,7 @@ between a b c = a >>. b .>> c
 sepBy1 :: Parser a -> Parser b -> Parser ([a],[b])
 a `sepBy1` seperator =
   a
-  .>>. (many (seperator .>>. a))
+  .>>. many (seperator .>>. a)
   |>> (\(first, rest) -> (first:map snd rest, map fst rest))
 
 sepBy :: Parser a -> Parser b -> Parser ([a],[b])
@@ -124,18 +124,26 @@ parseInt = digits |>> read
 parseString :: String -> Parser String
 parseString str = seqParse (map parseChar str) 
 
+allChars :: [Char]
+allChars = [minBound..maxBound]
+
+allowedStringCharacters :: [Char]
+allowedStringCharacters =
+  filter (not . (`elem` notAllowed)) allChars
+  where notAllowed = ['\"', '\n']
+
+
 stringLiteralCharacter :: Parser String
 stringLiteralCharacter = choice $ charParsers ++ escCharParsers
-  where chars             = ['a'..'z'] ++ ['A'..'Z'] ++ ['0'..'9']
-        charParsers       = map parseString . map (:[]) $ chars
+  where chars          = allowedStringCharacters
+        charParsers    = map (parseString . (:[])) chars
         escChars       = ['"', '\\', 'n'] -- ...
-        escCharParsers = map parseString . map (\char -> "\\" ++ [char]) $ escChars
+        escCharParsers = map (parseString . (\char -> "\\" ++ [char])) escChars
         
   
--- stringLiteral :: Parser String
--- stringLiteral = 
---   between doubleQuote (many stringLiteralCharacter) doubleQuote
-
-  
-
+stringLiteral :: Parser String
+stringLiteral = 
+  between doubleQuote (many stringLiteralCharacter) doubleQuote
+  |>> map (\str -> if length str == 2 then tail str else str)
+  |>> concat
 
