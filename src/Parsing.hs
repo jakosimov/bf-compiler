@@ -1,149 +1,314 @@
+{-# LANGUAGE NamedFieldPuns #-}
 module Parsing where
-import qualified Data.Map as Map
 
-data Parser a = Parser (String -> Either String (a, String))
+import Text.Parsec
+import Text.Parsec.String (Parser)
+import Text.Parsec.Combinator
+import Data.Char
+import Data.List (intersperse)
 
-run :: Parser a -> String -> Either String (a, String)
-run (Parser f) str = f str
+newtype CType = CType String
 
-(|>>) parser f = Parser $ \str ->
-    case run parser str of
-      Left error -> Left error
-      Right (x, rest) -> Right (f x, rest)
+newtype Identifier = Identifier String
 
-instance Functor Parser where
-  fmap f parser = parser |>> f
+data Expression =
+    FunctionCall Identifier [Expression]
+  | IdentifierExpression Identifier
+  | AssignmentExpression VariableAssignment
+  | StandardIntegerExpression Integer
+  | StandardFloatExpression Integer
 
-parseChar :: Char -> Parser Char
-parseChar c = Parser $ \str ->
-  case str of
-    [] -> Left "End of input"
-    (x:xs) ->
-      if x == c then
-        Right (c, xs)
-      else let
-        errorMessage = "Expected '" ++ [c] ++ "', found " ++ [x]
-      in Left errorMessage
+data VariableDeclaration = VariableDeclaration CType Identifier (Maybe Expression)
 
-andThen :: Parser a -> Parser b -> Parser (a,b) 
-p1 `andThen` p2 = Parser $ \str ->
-  case run p1 str of
-    Left error1 -> Left error1
-    Right (result1, rest1) ->
-      case run p2 rest1 of
-        Left error2 -> Left error2
-        Right (result2, rest2) -> Right ((result1, result2), rest2)
+data VariableAssignment = VariableAssignment Identifier Expression
 
-(.>>.) :: Parser a -> Parser b -> Parser (a,b)
-(.>>.) = andThen
+data ForInitializer =
+    DeclarationInitializer VariableDeclaration
+  | VariableInitializer VariableAssignment
+  | EmptyInitializer
 
-(.>>) :: Parser a -> Parser b -> Parser a
-p1 .>> p2 = (p1 .>>. p2) |>> fst
+data Statement =
+    DeclarationStatement VariableDeclaration
+  | ExpressionStatement Expression
+  | ReturnStatement (Maybe Expression)
+  | IfStatement Expression Body
+  | ElseIfStatement Expression Body
+  | ElseStatement Body
+  | WhileStatement Expression Body
+  | ForStatement ForInitializer Expression Expression Body -- Not correct first argument
+  | BreakStatement
 
-(>>.) :: Parser a -> Parser b -> Parser b
-p1 >>. p2 = (p1 .>>. p2) |>> snd
+type Body = [Statement]
 
-eitherOr :: Parser a -> Parser a -> Parser a
-p1 `eitherOr` p2 = Parser $ \str ->
-  case run p1 str of
-    Left error ->
-      run p2 str
-    result -> result
+data Parameter = Parameter CType Identifier
 
-(<|>) :: Parser a -> Parser a -> Parser a
-(<|>) = eitherOr
+data FunctionDefinition =
+  FunctionDefinition { returnType :: CType
+                     , functionName :: Identifier
+                     , parameters :: [Parameter]
+                     , functionBody :: Body
+                     }
 
-alwaysSuccess :: a -> Parser a
-alwaysSuccess x = Parser (\str -> Right (x, str))
+instance Show CType where
+  show (CType string) = map toUpper string
 
-alwaysFailure :: String -> Parser a
-alwaysFailure error = Parser (\_ -> Left error)
+instance Show Identifier where
+  show (Identifier string) = string
 
-combineResults :: Parser [b] -> Parser [b] -> Parser [b]
-combineResults p1 p2 = (p1 `andThen` p2) |>> uncurry (++)
+instance Show Parameter where
+  show (Parameter t i) =
+    show t ++ " " ++ show i
 
-seqParse :: [Parser a] -> Parser [a]
-seqParse ps = foldr combineResults (alwaysSuccess []) ps'
-  where ps' = map (|>> (:[])) ps 
+instance Show Expression where
+  show expr = case expr of
+    IdentifierExpression i -> show i
+    AssignmentExpression a -> show a
+    StandardIntegerExpression i -> show i
+    StandardFloatExpression f -> show f
+    FunctionCall i ps -> "FUNCTIONCALL"
 
-choice :: [Parser a] -> Parser a
-choice = foldl (<|>) (alwaysFailure errorMsg)
-  where errorMsg = "Empty choice"
+instance Show VariableDeclaration where
+  show (VariableDeclaration t i expr) =
+    show t ++ " " ++ show i ++
+    case expr of
+      Nothing -> ""
+      Just e  -> " := " ++ show e
 
-anyOf :: [Char] -> Parser Char
-anyOf cs = choice (map parseChar cs)
+instance Show VariableAssignment where
+  show (VariableAssignment i expr) =
+   show i ++ " := " ++ show expr
 
-many :: Parser a -> Parser [a]
-many p = combineResults p' (many p) <|> alwaysSuccess []
-  where p' = p |>> (:[])
+instance Show Statement where
+  show s = case s of
+    DeclarationStatement d -> "_DCLR_ " ++ show d ++ ";;"
+    ExpressionStatement e -> "_EXPR_ " ++ show e ++ ";;"
+    _ -> "???????? :-/"
 
-many1 :: Parser a -> Parser [a]
-many1 p = combineResults p' (many p)
-  where p' = p |>> (:[])
+instance Show FunctionDefinition where
+  show FunctionDefinition { returnType, functionName, parameters, functionBody } =
+    "FUNCTION DECLARATION \n" ++
+    "Return type: " ++ show returnType ++ "\n" ++
+    "Name: " ++ show functionName ++ "\n" ++
+    "Parameters: " ++ concat (intersperse ", " (map show parameters)) ++ "\n" ++
+    "Body: \n" ++ concat (intersperse "\n" (map show functionBody))
 
-opt :: Parser a -> Parser (Maybe a)
-opt p = p' <|> alwaysSuccess Nothing
-  where p' = p |>> Just
+testParse :: Parser a -> String -> Either ParseError a
+testParse parser = parse parser "test"
 
-between :: Parser a -> Parser b -> Parser c -> Parser b
-between a b c = a >>. b .>> c
+testText = "void hello(int a, char b) { int a = 2; int b; b = 3; }"
 
-sepBy1 :: Parser a -> Parser b -> Parser ([a],[b])
-a `sepBy1` seperator =
-  a
-  .>>. many (seperator .>>. a)
-  |>> (\(first, rest) -> (first:map snd rest, map fst rest))
+indentifierCharacter :: Parser Char
+indentifierCharacter = letter <|> digit
 
-sepBy :: Parser a -> Parser b -> Parser ([a],[b])
-a `sepBy` seperator = (a `sepBy1` seperator) <|> alwaysSuccess ([], [])
+legalIdentifier :: Parser String
+legalIdentifier =
+  do first <- letter
+     rest <- many indentifierCharacter
+     return (first:rest)
 
-lowercase :: Parser Char
-lowercase = anyOf ['a'..'z']
+identifier :: Parser Identifier
+identifier = fmap Identifier legalIdentifier
 
-uppercase :: Parser Char
-uppercase = anyOf ['A'..'Z']
+cType :: Parser CType
+cType = fmap CType legalIdentifier
 
-digit :: Parser Char
-digit = anyOf ['0'..'9']
+expression :: Parser Expression
+expression =
+  do spaces
+     result <- choice $ map try [ assignmentExpression
+                                , functionCall
+                                , standardIntegerExpression
+                                , standardFloatExpression
+                                , identifierExpression
+                                ]
+     spaces
+     return result
 
-whitespaceChar :: Parser Char
-whitespaceChar = anyOf [' ', '\t', '\n']
+functionCall :: Parser Expression
+functionCall =
+  do name <- identifier
+     spaces
+     char '('
+     arguments <- sepBy expression (char ',')
+     char ')'
+     return $ FunctionCall name arguments
 
-whitespace :: Parser [Char]
-whitespace = many1 whitespaceChar
+identifierExpression :: Parser Expression
+identifierExpression = fmap IdentifierExpression identifier
 
-digits :: Parser [Char]
-digits = many1 digit
+assignmentExpression :: Parser Expression
+assignmentExpression = fmap AssignmentExpression variableAssignment
 
-doubleQuote :: Parser Char
-doubleQuote = parseChar '"'
- 
-parseInt :: Parser Integer
-parseInt = digits |>> read
+standardIntegerExpression :: Parser Expression
+standardIntegerExpression =
+  do negativeSign <- optionMaybe (char '-')
+     spaces
+     integer <- many1 digit
+     let result = read integer *
+           case negativeSign of
+             Just _   -> -1
+             Nothing  -> 1
+     return $ StandardIntegerExpression result
 
-parseString :: String -> Parser String
-parseString str = seqParse (map parseChar str) 
+standardFloatExpression :: Parser Expression
+standardFloatExpression =
+  do negativeSign <- optionMaybe (char '-')
+     spaces
+     first <- many1 digit
+     char '.'
+     second <- many1 digit
+     let value = read (first ++ '.':second)
+         result = value *
+           case negativeSign of
+             Just _   -> -1
+             Nothing  -> 1
+     return $ StandardFloatExpression result
 
-allChars :: [Char]
-allChars = [minBound..maxBound]
+assignmentRightHand :: Parser Expression
+assignmentRightHand =
+  do spaces
+     char '='
+     spaces
+     result <- expression
+     spaces
+     return result
 
-allowedStringCharacters :: [Char]
-allowedStringCharacters =
-  filter (not . (`elem` notAllowed)) allChars
-  where notAllowed = ['\"', '\n']
+variableDeclaration :: Parser VariableDeclaration
+variableDeclaration =
+  do spaces
+     varType <- cType
+     spaces
+     name <- identifier
+     value <- optionMaybe assignmentRightHand
+     return $ VariableDeclaration varType name value
+
+variableAssignment :: Parser VariableAssignment
+variableAssignment =
+  do spaces
+     name <- identifier
+     value <- assignmentRightHand
+     return $ VariableAssignment name value
+
+statement :: Parser Statement
+statement =
+  do spaces
+     result <- choice $ map try [ declarationStatement
+                                , expressionStatement
+                                -- , keywordStatement
+                                ]
+     spaces
+     return result
+
+declarationStatement :: Parser Statement
+declarationStatement =
+  do result <- variableDeclaration
+     spaces
+     char ';'
+     return $ DeclarationStatement result
+
+expressionStatement :: Parser Statement
+expressionStatement =
+  do result <- expression
+     spaces
+     char ';'
+     return $ ExpressionStatement result
+
+returnStatement :: Parser Statement
+returnStatement =
+  do string "return"
+     spaces
+     result <- optionMaybe expression
+     spaces
+     char ';'
+     return $ ReturnStatement result
+
+ifStatement :: Parser Statement
+ifStatement =
+  do string "if"
+     spaces
+     char '('
+     expr <- expression
+     char ')'
+     spaces
+     statements <- body
+     spaces
+     return $ IfStatement expr statements
 
 
-stringLiteralCharacter :: Parser String
-stringLiteralCharacter = choice $ charParsers ++ escCharParsers
-  where chars          = allowedStringCharacters
-        charParsers    = map (parseString . (:[])) chars
-        escChars       = ['"', '\\', 'n'] -- ...
-        escCharParsers = map (parseString . (\char -> "\\" ++ [char])) escChars
-        
-  
-stringLiteral :: Parser String
-stringLiteral =
-  between doubleQuote (many stringLiteralCharacter) doubleQuote
-  |>> map (\str -> if length str == 2 then tail str else str)
-  |>> concat
+elseIfStatement :: Parser Statement
+elseIfStatement =
+  do string "else if"
+     spaces
+     char '('
+     expr <- expression
+     char ')'
+     spaces
+     statements <- body
+     spaces
+     return $ ElseIfStatement expr statements
 
+elseStatement :: Parser Statement
+elseStatement =
+  do string "else"
+     spaces
+     statements <- body
+     spaces
+     return $ ElseStatement statements
+
+whileStatement :: Parser Statement
+whileStatement =
+  do string "while"
+     spaces
+     char '('
+     expr <- expression
+     char ')'
+     spaces
+     statements <- body
+     spaces
+     return $ WhileStatement expr statements
+
+forStatement :: Parser Statement
+forStatement = undefined
+
+breakStatement :: Parser Statement
+breakStatement = fmap (const BreakStatement) (between spaces spaces $ string "break;")
+
+functionParameter :: Parser Parameter
+functionParameter =
+  do spaces
+     valueType <- cType
+     spaces
+     name <- identifier
+     spaces
+     return $ Parameter valueType name
+
+functionParameters :: Parser [Parameter]
+functionParameters =
+  do char '('
+     parameters <- sepBy functionParameter (char ',')
+     char ')'
+     return parameters
+
+body :: Parser Body
+body =
+  do char '{'
+     spaces
+     result <- many statement
+     spaces
+     char '}'
+     return result
+
+functionDefinition :: Parser FunctionDefinition
+functionDefinition =
+  do returnType <- cType
+     spaces
+     functionName <- identifier
+     spaces
+     parameters <- functionParameters
+     spaces
+     functionBody <- body
+     return FunctionDefinition { returnType
+                               , functionName
+                               , parameters
+                               , functionBody
+                               }

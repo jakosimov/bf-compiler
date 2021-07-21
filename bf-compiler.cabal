@@ -1,10 +1,10 @@
 cabal-version: 1.12
 
--- This file has been generated from package.yaml by hpack version 0.33.0.
+-- This file has been generated from package.yaml by hpack version 0.34.4.
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 7b4a48987bd3395ceb5dde5f45bf0f3ef6aa76ba1ef393108c35fbfe40261d3e
+-- hash: 68aa739ba045af92248ff51a137b427f1c92c90a47fc7e7439f30ae24847f066
 
 name:           bf-compiler
 version:        0.1.0.0
@@ -29,6 +29,7 @@ library
   exposed-modules:
       Lib
       Parsing
+      Printing
   other-modules:
       Paths_bf_compiler
   hs-source-dirs:
@@ -36,6 +37,7 @@ library
   build-depends:
       base >=4.7 && <5
     , containers
+    , parsec
   default-language: Haskell2010
 
 executable bf-compiler-exe
@@ -49,6 +51,7 @@ executable bf-compiler-exe
       base >=4.7 && <5
     , bf-compiler
     , containers
+    , parsec
   default-language: Haskell2010
 
 test-suite bf-compiler-test
@@ -63,4 +66,5 @@ test-suite bf-compiler-test
       base >=4.7 && <5
     , bf-compiler
     , containers
+    , parsec
   default-language: Haskell2010
