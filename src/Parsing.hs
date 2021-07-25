@@ -12,20 +12,51 @@ newtype CType = CType String
 
 newtype Identifier = Identifier String
 
-data Expression =
+data Atomic =
     FunctionCall Identifier [Expression]
-  | IdentifierExpression Identifier
-  | AssignmentExpression VariableAssignment
-  | StandardIntegerExpression Integer -- Add for other types of int
-  | StandardFloatExpression Integer -- Add for other types of float
+  | IdentifierAtomic Identifier
+  | IntegerLiteral Integer -- Add for other types of int
+  | FloatLiteral Integer -- Add for other types of float
+
+data Expression =
+    AtomicExpression Atomic
+  | AssignmentExpression Expression Expression
   | AdditionExpression Expression Expression
   | MultiplicationExpression Expression Expression
   | SubtractionExpression Expression Expression
   | DivisionExpression Expression Expression
+  | DereferenceExpression Expression
+  | ReferenceExpression Expression
+  | PreIncrementExpression Expression
+  | PreDecrementExpression Expression
+  | PostIncrementExpression Expression
+  | PostDecrementExpression Expression
+  | GreaterThanExpression Expression Expression
+  | LessThanExpression Expression Expression
+  | GreaterOrEqualExpression Expression Expression
+  | LessOrEqualExpression Expression Expression
+  | EqualToExpression Expression Expression
+  | NotEqualToExpression Expression Expression
+  | AndExpression Expression Expression
+  | OrExpression Expression Expression
+  | NotExpression Expression
 
 data VariableDeclaration = VariableDeclaration CType Identifier (Maybe Expression)
 
-data VariableAssignment = VariableAssignment Identifier Expression
+data Assoc = RightAssociative | LeftAssociative
+
+data Repeatable = Repeatable | NonRepeatable
+
+type BinaryP a = Parser (a -> a -> a)
+type UnaryP a = Parser (a -> a)
+
+data Operator a =
+    BinaryOperator (BinaryP a) Assoc
+  | PrefixOperator (UnaryP a) Repeatable
+  | SuffixOperator (UnaryP a) Repeatable
+
+type OperatorTable a = [[Operator a]]
+type OperatorLevel a   = [Operator a]
 
 data ForInitializer =
     DeclarationInitializer VariableDeclaration
@@ -54,7 +85,8 @@ data FunctionDefinition =
                      , functionBody :: Body
                      }
 
-data SourceFile = SourceFile FunctionDefinition
+data SourceFile = SourceFile FunctionDefinition | GlobalDeclaration VariableDeclaration
+
 
 instance Show CType where
   show (CType string) = map toUpper string
@@ -66,17 +98,41 @@ instance Show Parameter where
   show (Parameter t i) =
     show t ++ " " ++ show i
 
+instance Show Atomic where
+  show atomic = case atomic of
+    FunctionCall iden exprs -> show iden ++ "(" ++ intercalate ", " (map show exprs) ++ ")"
+    IdentifierAtomic i      -> show i
+    IntegerLiteral i        -> show i
+    FloatLiteral f          -> show f
+
 instance Show Expression where
   show expr = case expr of
-    IdentifierExpression i        -> show i
-    AssignmentExpression a        -> show a
-    StandardIntegerExpression i   -> show i
-    StandardFloatExpression f     -> show f
-    FunctionCall i ps             -> "FUNCTIONCALL"
-    AdditionExpression e e'       -> show e ++ " + " ++ show e'
-    SubtractionExpression e e'    -> show e ++ " - " ++ show e'
-    MultiplicationExpression e e' -> show e ++ " * " ++ show e'
-    DivisionExpression e e'       -> show e ++ " / " ++ show e'
+    AtomicExpression atom        -> show atom
+    AssignmentExpression l r     -> bin ":=" l r
+    AdditionExpression a b       -> bin "+" a b
+    SubtractionExpression a b    -> bin "-" a b
+    MultiplicationExpression a b -> bin "*" a b
+    DivisionExpression a b       -> bin "/" a b
+    DereferenceExpression a      -> pre "*" a
+    ReferenceExpression a        -> pre "&" a
+    PreIncrementExpression a     -> pre "++" a
+    PreDecrementExpression a     -> pre "--" a
+    PostIncrementExpression a    -> suf "++" a
+    PostDecrementExpression a    -> suf "--" a
+    GreaterThanExpression a b    -> bin ">" a b
+    LessThanExpression a b       -> bin "<" a b
+    GreaterOrEqualExpression a b -> bin ">=" a b
+    LessOrEqualExpression a b    -> bin ">=" a b
+    EqualToExpression a b        -> bin "==" a b
+    NotEqualToExpression a b     -> bin "!=" a b
+    AndExpression a b            -> bin "&&" a b
+    OrExpression a b             -> bin "||" a b
+    NotExpression a              -> pre "!" a
+    where showInParens s = "(" ++ s ++ ")"
+          bin s a b = showInParens $ show a ++ " "  ++ s ++ " " ++ show b
+          pre s a = showInParens $ s ++ show a
+          suf s a = showInParens $ show a ++ s
+
 
 instance Show VariableDeclaration where
   show (VariableDeclaration t i expr) =
@@ -84,10 +140,6 @@ instance Show VariableDeclaration where
     case expr of
       Nothing -> ""
       Just e  -> " := " ++ show e
-
-instance Show VariableAssignment where
-  show (VariableAssignment i expr) =
-   show i ++ " := " ++ show expr
 
 showBody :: Body -> String
 showBody body = intercalate "\n" (map show body)
@@ -122,10 +174,15 @@ instance Show FunctionDefinition where
 
 instance Show SourceFile where
   show (SourceFile d) = show d
+  show (GlobalDeclaration d) = "Global Declaration: MISSING REPRESENTATION"
 
 testParse :: Parser a -> String -> Either ParseError a
 testParse parser = parse parser "test"
 
+testExpr :: String -> Either ParseError Expression
+testExpr = parse expression "expressionTest"
+
+testText :: String
 testText = "void hello(int a, char b) { int a = 2; int b; b = 3; }"
 
 spaced :: Parser a -> Parser a
@@ -146,22 +203,6 @@ identifier = fmap Identifier legalIdentifier
 cType :: Parser CType
 cType = fmap CType legalIdentifier
 
-expression :: Parser Expression
-expression =
-  do spaces
-     result <- choice $ map try [ assignmentExpression
-                                , additionExpression
-                                , subtractionExpression
-                                , multiplicationExpression
-                                , divisionExpression
-                                , parenthesisExpression
-                                , functionCall
-                                , standardIntegerExpression
-                                , standardFloatExpression
-                                , identifierExpression
-                                ]
-     spaces
-     return result
 
 commaSep :: Parser a -> Parser [a]
 commaSep p = sepBy p (char ',')
@@ -169,90 +210,148 @@ commaSep p = sepBy p (char ',')
 inParens :: Parser a -> Parser a
 inParens = between (char '(') (char ')')
 
-functionCall :: Parser Expression
+-- START OF DEFINITIONS OF ATOMICS ----
+
+atomic :: Parser Atomic
+atomic = spaced $ choice $ map try [ functionCall
+                                   , identifierExpression
+                                   , integerLiteral
+                                   , floatLiteral
+                                   ]
+
+functionCall :: Parser Atomic
 functionCall =
   do name <- identifier
      spaces
      arguments <- inParens $ commaSep expression
      return $ FunctionCall name arguments
 
-identifierExpression :: Parser Expression
-identifierExpression = IdentifierExpression <$> identifier
+identifierExpression :: Parser Atomic
+identifierExpression = IdentifierAtomic <$> identifier
 
-assignmentExpression :: Parser Expression
-assignmentExpression = AssignmentExpression <$> variableAssignment
+integerLiteral :: Parser Atomic
+integerLiteral =
+  do num <- many1 digit
+     return . IntegerLiteral $ read num
 
-standardIntegerExpression :: Parser Expression
-standardIntegerExpression =
-  do negativeSign <- optionMaybe (char '-')
-     spaces
-     integer <- many1 digit
-     let result = read integer *
-           case negativeSign of
-             Just _   -> -1
-             Nothing  -> 1
-     return $ StandardIntegerExpression result
-
-standardFloatExpression :: Parser Expression
-standardFloatExpression =
-  do negativeSign <- optionMaybe (char '-')
-     spaces
-     first <- many1 digit
+floatLiteral :: Parser Atomic
+floatLiteral =
+  do first <- many1 digit
      char '.'
      second <- many1 digit
-     let value = read (first ++ '.':second)
-         result = value *
-           case negativeSign of
-             Just _   -> -1
-             Nothing  -> 1
-     return $ StandardFloatExpression result
+     let fullString = first ++ "." ++ second
+     return . FloatLiteral $ read fullString
 
-parenthesisExpression :: Parser Expression
-parenthesisExpression = inParens expression
+-- END OF DEFINITIONS OF ATOMICS ----
 
-operatorExpression :: Char -> (Expression -> Expression -> Expression) -> Parser Expression
-operatorExpression operator constr  =
-  do a <- expression
-     spaces
-     char operator
-     spaces
-     constr a <$> expression
+-- START OF DEFINITIONS OF EXPRESSIONS ----
 
-additionExpression :: Parser Expression
-additionExpression = operatorExpression '+' AdditionExpression
+parenthesizedExpression = inParens (spaced expression)
 
-multiplicationExpression :: Parser Expression
-multiplicationExpression = operatorExpression '-' SubtractionExpression
+atomicExpression :: Parser Expression
+atomicExpression = (AtomicExpression <$> atomic) <|> parenthesizedExpression
 
-subtractionExpression :: Parser Expression
-subtractionExpression = operatorExpression '*' MultiplicationExpression
+expression :: Parser Expression
+expression = makeOperationsParser operatorTable atomicExpression
 
-divisionExpression :: Parser Expression
-divisionExpression = operatorExpression '/' DivisionExpression
+groupOperations :: OperatorLevel a -> ([BinaryP a], [BinaryP a], [UnaryP a], [UnaryP a])
+groupOperations = foldl helper ([], [], [], [])
+  where helper (leftAssoc, rightAssoc, prefixes, suffixes) operator =
+          case operator of
+            BinaryOperator p LeftAssociative  -> (p:leftAssoc, rightAssoc, prefixes, suffixes)
+            BinaryOperator p RightAssociative -> (leftAssoc, p:rightAssoc, prefixes, suffixes)
+            PrefixOperator p _                -> (leftAssoc, rightAssoc, p:prefixes, suffixes)
+            SuffixOperator p _                -> (leftAssoc, rightAssoc, prefixes, p:suffixes)
 
-assignmentRightHand :: Parser Expression
-assignmentRightHand =
-  do spaces
-     char '='
-     spaces
-     result <- expression
-     spaces
-     return result
+makePrefixP :: UnaryP a -> UnaryP a
+makePrefixP prefix = prefixP
+  where prefixP =
+          do result <- prefix
+             rest <- prefixP
+             return $ result . rest
+          <|> return id
 
-variableDeclaration :: Parser VariableDeclaration
-variableDeclaration =
-  do spaces
-     varType <- cType
-     spaces
-     name <- identifier
-     value <- optionMaybe assignmentRightHand
-     return $ VariableDeclaration varType name value
+makeSuffixP :: UnaryP a -> UnaryP a
+makeSuffixP suffix = suffixP
+  where suffixP =
+          do op <- suffix
+             rest <- suffixP
+             return $ rest . op
+          <|> return id
 
-variableAssignment :: Parser VariableAssignment
-variableAssignment =
-  do spaces
-     name <- identifier
-     VariableAssignment name <$> assignmentRightHand
+makeTermP :: Parser a -> UnaryP a -> UnaryP a -> Parser a
+makeTermP term prefix suffix =
+  do prefixF <- prefixP
+     x <- term
+     suffixF <- suffixP
+     return $ suffixF (prefixF x)
+  where prefixP = makePrefixP prefix
+        suffixP = makeSuffixP suffix
+
+makeRightAssocP :: BinaryP a -> Parser a -> a -> Parser a
+makeRightAssocP rightAssoc termP = rightAssocP
+  where rightAssocP x =
+          do op <- rightAssoc
+             term <- termP
+             rest <- rightAssocP term <|> return term
+             return $ op x rest
+
+makeLeftAssocP :: BinaryP a -> Parser a -> a -> Parser a
+makeLeftAssocP leftAssoc termP = leftAssocP
+  where leftAssocP x =
+          do op <- leftAssoc
+             term <- termP
+             let result = op x term
+             leftAssocP result <|> return result
+
+makeOperationLevelParser :: Parser a -> OperatorLevel a -> Parser a
+makeOperationLevelParser simpleExpr operatorsInLevel =
+  do term <- termP
+     rightAssocP term <|> leftAssocP term <|> return term
+
+  where (leftAssociatives, rightAssociatives, prefixes, suffixes) = groupOperations operatorsInLevel
+        rightAssoc = choice $ map try rightAssociatives
+        leftAssoc  = choice $ map try leftAssociatives
+        prefix     = choice $ map try prefixes
+        suffix     = choice $ map try suffixes
+
+        termP       = makeTermP simpleExpr prefix suffix
+        rightAssocP = makeRightAssocP rightAssoc termP
+        leftAssocP  = makeLeftAssocP leftAssoc termP
+
+makeOperationsParser :: OperatorTable a -> Parser a -> Parser a
+makeOperationsParser operations atomicExpression =
+  foldl makeOperationLevelParser atomicExpression operations
+
+newLeftAssoc :: String -> (a -> a -> a) -> Operator a
+newLeftAssoc str op = BinaryOperator (spaced (string str) >> return op) LeftAssociative
+
+newRightAssoc :: String -> (a -> a -> a) -> Operator a
+newRightAssoc str op = BinaryOperator (spaced (string str) >> return op) RightAssociative
+
+newPrefix :: String -> (a -> a) -> Operator a
+newPrefix str op = PrefixOperator (spaced (string str) >> return op) Repeatable
+
+newSuffix :: String -> (a -> a) -> Operator a
+newSuffix str op = SuffixOperator (spaced (string str) >> return op) Repeatable
+
+operatorTable :: OperatorTable Expression
+operatorTable = [ [ newPrefix "*" DereferenceExpression, newPrefix "&" ReferenceExpression ]
+                , [ newPrefix "!" NotExpression ]
+                , [ newPrefix "++" PreIncrementExpression, newPrefix "--" PreDecrementExpression ]
+                , [ newSuffix "++" PostIncrementExpression, newSuffix "--" PostDecrementExpression ]
+                , [ newLeftAssoc "*" MultiplicationExpression, newLeftAssoc "/" DivisionExpression ]
+                , [ newLeftAssoc "+" AdditionExpression, newLeftAssoc "-" SubtractionExpression ]
+                , [ newRightAssoc ">" GreaterThanExpression, newRightAssoc "<" LessThanExpression
+                  , newRightAssoc ">=" GreaterOrEqualExpression, newRightAssoc "<=" LessOrEqualExpression ]
+                , [ newRightAssoc "==" EqualToExpression, newRightAssoc "!=" NotEqualToExpression ]
+                , [ newLeftAssoc "&&" AndExpression, newLeftAssoc "||" OrExpression ]
+                , [ newRightAssoc "=" AssignmentExpression ]
+                ]
+
+-- END OF DEFINITIONS OF EXPRESSIONS ----
+
+-- START OF DEFINITIONS OF STATEMENTS ----
 
 statement :: Parser Statement
 statement =
@@ -272,6 +371,25 @@ statement =
 
 semicolon :: Parser Char
 semicolon = char ';'
+
+assignmentRightHand :: Parser Expression
+assignmentRightHand =
+  do spaces
+     char '='
+     spaces
+     result <- expression
+     spaces
+     return result
+
+variableDeclaration :: Parser VariableDeclaration
+variableDeclaration =
+  do spaces
+     varType <- cType
+     spaces
+     name <- identifier
+     value <- optionMaybe assignmentRightHand
+     return $ VariableDeclaration varType name value
+
 
 declarationStatement :: Parser Statement
 declarationStatement =
@@ -342,22 +460,6 @@ forInitializer =
         expressionInitializer = ExpressionInitializer <$> expression
         emptyInitializer      = EmptyInitializer <$ spaces
 
-assocIndex :: Eq a => [[(a, b)]] -> a -> Maybe Int
-assocIndex [] _ = Nothing
-assocIndex (xs:xss) x'
-  | any ((==x') . fst) xs = Just 0
-  | otherwise             = case assocIndex xss x' of
-      Just n  -> Just $ n + 1
-      Nothing -> Nothing
-
--- data Atom = AtomicIdentifier String |
-
-leftAssociativeOperators :: [[(Char, Expression -> Expression -> Expression)]] -> Parser Expression
-leftAssociativeOperators operations = undefined
-  where atomicExpression = identifier
-        operators        = map fst $ concat operations
-
-
 forStatement :: Parser Statement
 forStatement =
   do string "for"
@@ -374,6 +476,10 @@ forStatement =
 
 breakStatement :: Parser Statement
 breakStatement = fmap (const BreakStatement) (between spaces spaces $ string "break;")
+
+-- END OF DEFINITIONS OF STATEMENTS ----
+
+-- START OF DEFINITIONS OF FUNCTION DECLARATIONS ----
 
 functionParameter :: Parser Parameter
 functionParameter =
@@ -405,6 +511,8 @@ functionDefinition =
                                , parameters
                                , functionBody
                                }
+
+-- END OF DEFINITIONS OF FUNCTION DECLARATIONS ----
 
 sourceFile :: Parser SourceFile
 sourceFile = fmap SourceFile (between spaces spaces functionDefinition)
