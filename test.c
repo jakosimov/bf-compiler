@@ -1,13 +1,21 @@
 #include <stdio.h>
 
-int main(int a, char** vc) {
+int kanske(int a) {
+  return a * a;
+}
 
-  int* * *b = 2 * (2 + 3), **c = 2;
+int main(int cc, char** vc) {
 
-  for ( ;  ; ) {
+  int a = 0;
+  int b = 1;
+  int N = 10;
 
-    return 0;
+  for (int i = 0 ; i < N ; i++) {
+    printf(a);
+    b += a;
+    a = b - a;
   }
+
 
   return 0;
 }
