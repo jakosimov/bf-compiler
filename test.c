@@ -1,11 +1,12 @@
 #include <stdio.h>
 
-int main() {
+int main(int a, char** vc) {
 
-  int a = 2;
-  int b = 2 * (a + 2);
-  while (b / a) {
-    a = a + 1;
+  int* * *b = 2 * (2 + 3), **c = 2;
+
+  for ( ;  ; ) {
+
+    return 0;
   }
 
   return 0;

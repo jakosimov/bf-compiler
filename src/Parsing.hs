@@ -8,7 +8,8 @@ import Data.Char
 import System.IO
 import Data.List (intercalate)
 
-newtype CType = CType String
+data DataType = DataType String
+              | PointerType DataType
 
 newtype Identifier = Identifier String
 
@@ -41,7 +42,7 @@ data Expression =
   | OrExpression Expression Expression
   | NotExpression Expression
 
-data VariableDeclaration = VariableDeclaration CType Identifier (Maybe Expression)
+data VariableDeclaration = VariableDeclaration DataType Identifier (Maybe Expression)
 
 data Assoc = RightAssociative | LeftAssociative
 
@@ -59,27 +60,31 @@ type OperatorTable a = [[Operator a]]
 type OperatorLevel a   = [Operator a]
 
 data ForInitializer =
-    DeclarationInitializer VariableDeclaration
+    DeclarationInitializer [VariableDeclaration]
   | ExpressionInitializer Expression
   | EmptyInitializer
 
+data ForClause =
+    ExpressionClause Expression
+  | EmptyClause
+
 data Statement =
-    DeclarationStatement VariableDeclaration
+    DeclarationStatement [VariableDeclaration]
   | ExpressionStatement Expression
   | ReturnStatement (Maybe Expression)
   | IfStatement Expression Body
   | ElseIfStatement Expression Body
   | ElseStatement Body
   | WhileStatement Expression Body
-  | ForStatement ForInitializer Expression Expression Body
+  | ForStatement ForInitializer ForClause ForClause Body
   | BreakStatement
 
 type Body = [Statement]
 
-data Parameter = Parameter CType Identifier
+data Parameter = Parameter DataType Identifier
 
 data FunctionDefinition =
-  FunctionDefinition { returnType :: CType
+  FunctionDefinition { returnType :: DataType
                      , functionName :: Identifier
                      , parameters :: [Parameter]
                      , functionBody :: Body
@@ -88,8 +93,9 @@ data FunctionDefinition =
 data SourceFile = SourceFile FunctionDefinition | GlobalDeclaration VariableDeclaration
 
 
-instance Show CType where
-  show (CType string) = map toUpper string
+instance Show DataType where
+  show (DataType string) = map toUpper string
+  show (PointerType t) = show t ++ "*"
 
 instance Show Identifier where
   show (Identifier string) = string
@@ -150,17 +156,22 @@ instance Show ForInitializer where
     ExpressionInitializer e  -> show e
     EmptyInitializer         -> "--"
 
+instance Show ForClause where
+  show c = case c of
+    ExpressionClause e -> show e
+    EmptyClause        -> "--"
+
 instance Show Statement where
   show s = case s of
-    DeclarationStatement d    -> "_DCLR_ " ++ show d ++ ";;"
-    ExpressionStatement e     -> "_EXPR_ " ++ show e ++ ";;"
+    DeclarationStatement ds   -> intercalate ", " (map show ds) ++ ";;"
+    ExpressionStatement e     -> show e ++ ";;"
     ReturnStatement (Just e)  -> "RETURN " ++ show e ++ ";;"
     ReturnStatement Nothing   -> "RETURN ;;"
     IfStatement e b           -> "IF (" ++ show e ++ ")\n" ++ showBody b ++ "\nEND IF"
     ElseIfStatement e b       -> "ELSEIF (" ++ show e ++ ")\n" ++ showBody b ++ "\nEND ELSE IF"
     ElseStatement b           -> "ELSE\n" ++ showBody b ++ "\nEND ELSE"
     WhileStatement e b        -> "WHILE (" ++ show e ++ ")\n" ++ showBody b ++ "\nEND WHILE"
-    ForStatement init c inc b -> "FOR (" ++ show init ++ ";" ++ show c ++ ";"  ++ show inc ++ ")\n" ++ showBody b ++ "\nEND FOR"
+    ForStatement init c inc b -> "FOR (" ++ show init ++ " ; " ++ show c ++ " ; "  ++ show inc ++ ")\n" ++ showBody b ++ "\nEND FOR"
     BreakStatement            -> "BREAK ;;"
 
 
@@ -176,36 +187,50 @@ instance Show SourceFile where
   show (SourceFile d) = show d
   show (GlobalDeclaration d) = "Global Declaration: MISSING REPRESENTATION"
 
-testParse :: Parser a -> String -> Either ParseError a
-testParse parser = parse parser "test"
+testP :: Parser a -> String -> Either ParseError a
+testP parser = parse parser "test"
 
 testExpr :: String -> Either ParseError Expression
 testExpr = parse expression "expressionTest"
+
+testStatement :: String -> Either ParseError Statement
+testStatement = parse statement "statementTest"
 
 testText :: String
 testText = "void hello(int a, char b) { int a = 2; int b; b = 3; }"
 
 spaced :: Parser a -> Parser a
-spaced = between spaces spaces
+spaced = between (try spaces) (try spaces)
+
+identifierStartLetter :: Parser Char
+identifierStartLetter = letter <|> char '_'
 
 indentifierCharacter :: Parser Char
-indentifierCharacter = letter <|> digit
+indentifierCharacter = identifierStartLetter <|> digit
 
 legalIdentifier :: Parser String
 legalIdentifier =
-  do first <- letter
+  do first <- try identifierStartLetter
      rest <- many indentifierCharacter
      return (first:rest)
 
 identifier :: Parser Identifier
-identifier = fmap Identifier legalIdentifier
+identifier = fmap Identifier legalIdentifier <?> "identifier"
 
-cType :: Parser CType
-cType = fmap CType legalIdentifier
-
+dataType :: Parser DataType
+dataType = (DataType <$> legalIdentifier) <?> "data type"
+  -- do identifier <- legalIdentifier
+  --    pointerSymbols <- many (spaced (char '*'))
+  --    let wrapInPointer dataType _ = PointerType dataType
+  --        startType                = DataType identifier
+  --    return $ foldl wrapInPointer startType pointerSymbols
+  -- <?> "data type"
 
 commaSep :: Parser a -> Parser [a]
 commaSep p = sepBy p (char ',')
+
+commaSep1 :: Parser a -> Parser [a]
+commaSep1 p = sepBy1 p (char ',')
 
 inParens :: Parser a -> Parser a
 inParens = between (char '(') (char ')')
@@ -213,17 +238,20 @@ inParens = between (char '(') (char ')')
 -- START OF DEFINITIONS OF ATOMICS ----
 
 atomic :: Parser Atomic
-atomic = spaced $ choice $ map try [ functionCall
-                                   , identifierExpression
-                                   , integerLiteral
-                                   , floatLiteral
-                                   ]
+atomic = spaced $ choice [ functionCall
+                         , identifierExpression
+                         , integerLiteral
+                         , floatLiteral
+                         ]
 
 functionCall :: Parser Atomic
 functionCall =
-  do name <- identifier
-     spaces
-     arguments <- inParens $ commaSep expression
+  do name <- try $ do name <- identifier
+                      spaces
+                      char '('
+                      return name
+     arguments <- commaSep expression
+     char ')'
      return $ FunctionCall name arguments
 
 identifierExpression :: Parser Atomic
@@ -231,16 +259,19 @@ identifierExpression = IdentifierAtomic <$> identifier
 
 integerLiteral :: Parser Atomic
 integerLiteral =
-  do num <- many1 digit
+  do num <- try $ many1 digit
      return . IntegerLiteral $ read num
+  <?> "integer literal"
 
 floatLiteral :: Parser Atomic
 floatLiteral =
-  do first <- many1 digit
-     char '.'
-     second <- many1 digit
+  do (first, second) <- try $ do first <- many1 digit
+                                 char '.'
+                                 second <- many1 digit
+                                 return (first, second)
      let fullString = first ++ "." ++ second
      return . FloatLiteral $ read fullString
+  <?> "float literal"
 
 -- END OF DEFINITIONS OF ATOMICS ----
 
@@ -252,7 +283,7 @@ atomicExpression :: Parser Expression
 atomicExpression = (AtomicExpression <$> atomic) <|> parenthesizedExpression
 
 expression :: Parser Expression
-expression = makeOperationsParser operatorTable atomicExpression
+expression = makeOperationsParser operatorTable atomicExpression <?> "expression"
 
 groupOperations :: OperatorLevel a -> ([BinaryP a], [BinaryP a], [UnaryP a], [UnaryP a])
 groupOperations = foldl helper ([], [], [], [])
@@ -312,7 +343,7 @@ makeOperationLevelParser simpleExpr operatorsInLevel =
   where (leftAssociatives, rightAssociatives, prefixes, suffixes) = groupOperations operatorsInLevel
         rightAssoc = choice $ map try rightAssociatives
         leftAssoc  = choice $ map try leftAssociatives
-        prefix     = choice $ map try prefixes
+        prefix     = choice (map try prefixes) <?> "prefix operator"
         suffix     = choice $ map try suffixes
 
         termP       = makeTermP simpleExpr prefix suffix
@@ -354,46 +385,61 @@ operatorTable = [ [ newPrefix "*" DereferenceExpression, newPrefix "&" Reference
 -- START OF DEFINITIONS OF STATEMENTS ----
 
 statement :: Parser Statement
-statement =
-  do spaces
-     result <- choice $ map try [ declarationStatement
-                                , expressionStatement
-                                , returnStatement
-                                , ifStatement
-                                , elseIfStatement
-                                , elseStatement
-                                , whileStatement
-                                , forStatement
-                                , breakStatement
-                                ]
-     spaces
-     return result
+statement = statementP  <?> "statement"
+  where statementP = spaced $ choice [ returnStatement
+                                     , ifStatement
+                                     , elseIfStatement
+                                     , elseStatement
+                                     , whileStatement
+                                     , forStatement
+                                     , breakStatement
+                                     , declarationStatement
+                                     , expressionStatement
+                                     ]
 
 semicolon :: Parser Char
 semicolon = char ';'
 
 assignmentRightHand :: Parser Expression
 assignmentRightHand =
-  do spaces
-     char '='
-     spaces
+  do try $ spaced $ char '='
      result <- expression
      spaces
      return result
 
-variableDeclaration :: Parser VariableDeclaration
-variableDeclaration =
-  do spaces
-     varType <- cType
-     spaces
-     name <- identifier
+wrapTypeInPointer :: DataType -> Int -> DataType
+wrapTypeInPointer d 0 = d
+wrapTypeInPointer d n = PointerType $ wrapTypeInPointer d (n-1)
+
+pointerAsterisks :: Parser [Char]
+pointerAsterisks = many asterix
+  where asterix = try $ do spaces
+                           c <- char '*'
+                           spaces
+                           return '*'
+
+declarationVariable :: DataType -> Parser VariableDeclaration
+declarationVariable dataType =
+  do (asterisks, name) <- try $ do spaces
+                                   asterisks <- pointerAsterisks
+                                   spaces
+                                   name <- identifier
+                                   return (asterisks, name)
+     let fullType = wrapTypeInPointer dataType (length asterisks)
      value <- optionMaybe assignmentRightHand
-     return $ VariableDeclaration varType name value
+     return $ VariableDeclaration fullType name value
+
+variableDeclaration :: Parser [VariableDeclaration]
+variableDeclaration =
+  do varType <- dataType
+     spaces
+     commaSep1 (declarationVariable varType)
+  <?> "variable declaration"
 
 
 declarationStatement :: Parser Statement
 declarationStatement =
-  do result <- variableDeclaration
+  do result <- try variableDeclaration
      spaces
      semicolon
      return $ DeclarationStatement result
@@ -407,7 +453,7 @@ expressionStatement =
 
 returnStatement :: Parser Statement
 returnStatement =
-  do string "return"
+  do try $ string "return"
      spaces
      result <- optionMaybe expression
      spaces
@@ -419,16 +465,15 @@ condition = between spaces spaces $ inParens expression
 
 ifStatement :: Parser Statement
 ifStatement =
-  do string "if"
+  do try $ string "if"
      expr <- condition
      statements <- body
      spaces
      return $ IfStatement expr statements
 
-
 elseIfStatement :: Parser Statement
 elseIfStatement =
-  do string "else if"
+  do try $ string "else if"
      expr <- condition
      statements <- body
      spaces
@@ -436,7 +481,7 @@ elseIfStatement =
 
 elseStatement :: Parser Statement
 elseStatement =
-  do string "else"
+  do try $ string "else"
      spaces
      statements <- body
      spaces
@@ -444,7 +489,7 @@ elseStatement =
 
 whileStatement :: Parser Statement
 whileStatement =
-  do string "while"
+  do try $ string "while"
      expr <- condition
      statements <- body
      spaces
@@ -452,39 +497,47 @@ whileStatement =
 
 forInitializer :: Parser ForInitializer
 forInitializer =
-  choice $ map try [ declarationInitializer
-                   , expressionInitializer
-                   , emptyInitializer
-                   ]
+  choice [ declarationInitializer
+         , expressionInitializer
+         ]
+  <|> return EmptyInitializer
   where declarationInitializer = DeclarationInitializer <$> variableDeclaration
         expressionInitializer = ExpressionInitializer <$> expression
-        emptyInitializer      = EmptyInitializer <$ spaces
+
+forClause :: Parser ForClause
+forClause = expressionClause <|> return EmptyClause <?> "for clause"
+  where expressionClause = ExpressionClause <$> expression
 
 forStatement :: Parser Statement
 forStatement =
-  do string "for"
+  do try $ string "for"
      spaces
      char '('
      init <- spaced forInitializer
      semicolon
-     condition <- spaced expression
+     condition <- spaced forClause
      semicolon
-     incrementation <- spaced expression
+     incrementation <- spaced forClause
      char ')'
      statements <- spaced body
      return $ ForStatement init condition incrementation statements
 
 breakStatement :: Parser Statement
-breakStatement = fmap (const BreakStatement) (between spaces spaces $ string "break;")
+breakStatement = BreakStatement <$ try (string "break;")
 
 -- END OF DEFINITIONS OF STATEMENTS ----
 
 -- START OF DEFINITIONS OF FUNCTION DECLARATIONS ----
 
+fullType :: Parser DataType
+fullType =
+  do baseType <- dataType
+     wrapTypeInPointer baseType . length <$> pointerAsterisks
+
 functionParameter :: Parser Parameter
 functionParameter =
   do spaces
-     valueType <- cType
+     valueType <- fullType
      spaces
      name <- identifier
      spaces
@@ -495,11 +548,11 @@ functionParameters =
   do inParens $ commaSep functionParameter
 
 body :: Parser Body
-body = between (char '{') (char '}') $ spaced $ many statement
+body = between (char '{') (char '}') $ many statement
 
 functionDefinition :: Parser FunctionDefinition
 functionDefinition =
-  do returnType <- cType
+  do returnType <- fullType
      spaces
      functionName <- identifier
      spaces
