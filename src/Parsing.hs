@@ -26,6 +26,9 @@ import Data.List (intercalate)
 
 data DataType = DataType String
               | PointerType DataType
+              | UnsignedType DataType
+              | LongLongType DataType
+              | LongType DataType
 
 newtype Identifier = Identifier String
 
@@ -132,6 +135,9 @@ newtype SourceFile = SourceFile [SourceDeclaration]
 instance Show DataType where
   show (DataType string) = map toUpper string
   show (PointerType t) = show t ++ "*"
+  show (UnsignedType t) = "UNSIGNED " ++ show t
+  show (LongType t) = "LONG " ++ show t
+  show (LongLongType t) = "LONG LONG " ++ show t
 
 instance Show Identifier where
   show (Identifier string) = string
@@ -322,19 +328,23 @@ identifier = fmap Identifier legalIdentifier <?> "identifier"
 
 dataType :: Parser DataType
 dataType =
-  do unsigned <- orEmpty $ do res <- string "unsigned"
+  do unsigned <- orFalse $ do res <- string "unsigned"
                               emptySpace1
-                              return $ res ++ " "
-     firstLong <- orEmpty $ do res <- string "long"
+                              return True
+     firstLong <- orFalse $ do res <- string "long"
                                emptySpace1
-                               return $ res ++ " "
-     secondLong <- orEmpty $ do res <- string "long"
+                               return True
+     secondLong <- orFalse $ do res <- string "long"
                                 emptySpace1
-                                return $ res ++ " "
-     dataType <- legalIdentifier
-     return $ DataType $ unsigned ++ firstLong ++ secondLong ++ dataType
+                                return True
+     let sign = if unsigned then UnsignedType else id
+         long | firstLong && secondLong = LongLongType
+              | firstLong               = LongType
+              | otherwise               = id
+     dataType <- DataType <$> legalIdentifier
+     return $ sign (long dataType)
   <?> "data type"
-  where orEmpty p = try p <|> return ""
+  where orFalse p = try p <|> return False
 
 
 commaSep :: Parser a -> Parser [a]
