@@ -287,7 +287,21 @@ identifier :: Parser Identifier
 identifier = fmap Identifier legalIdentifier <?> "identifier"
 
 dataType :: Parser DataType
-dataType = (DataType <$> legalIdentifier) <?> "data type"
+dataType =
+  do unsigned <- orEmpty $ do res <- string "unsigned"
+                              many1 space
+                              return $ res ++ " "
+     firstLong <- orEmpty $ do res <- string "long"
+                               many1 space
+                               return $ res ++ " "
+     secondLong <- orEmpty $ do res <- string "long"
+                                many1 space
+                                return $ res ++ " "
+     dataType <- legalIdentifier
+     return $ DataType $ unsigned ++ firstLong ++ secondLong ++ dataType
+  <?> "data type"
+  where orEmpty p = try p <|> return ""
+
 
 commaSep :: Parser a -> Parser [a]
 commaSep p = sepBy p (char ',')
