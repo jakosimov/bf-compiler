@@ -1,7 +1,7 @@
 {-# LANGUAGE NamedFieldPuns, BangPatterns #-}
 module Parsing
   ( DataType (..)
-  , Identifier
+  , Identifier (..)
   , Signed (..)
   , IntegerType (..)
   , FloatType (..)
@@ -29,20 +29,17 @@ data DataType = DataType String
 
 newtype Identifier = Identifier String
 
-identifierString :: Identifier -> String
-identifierString (Identifier s) = s
-
 data Signed = Signed | Unsigned
 data IntegerType = StandardInt | LongInt | LongLongInt
 data FloatType = FloatType | DoubleType
 
-data Atomic =
+data Atomic=
     FunctionCall Identifier [Expression]
   | IdentifierAtomic Identifier
   | CharLiteral Char
   | StringLiteral String
-  | IntegerLiteral Integer IntegerType Signed  -- Add for other types of int
-  | FloatLiteral Double FloatType -- Add for other types of float
+  | IntegerLiteral Integer IntegerType Signed
+  | FloatLiteral Double FloatType
 
 data BinaryExpressionType =
     Assignment
@@ -160,6 +157,8 @@ instance Show Atomic where
   show atomic = case atomic of
     FunctionCall iden exprs -> show iden ++ "(" ++ intercalate ", " (map show exprs) ++ ")"
     IdentifierAtomic i      -> show i
+    CharLiteral c           -> show c
+    StringLiteral s         -> show s
     IntegerLiteral i t s    -> show i ++ show s ++ show t
     FloatLiteral f t        -> show f ++ show t
 
@@ -269,9 +268,6 @@ testExpr = parse expression "expressionTest"
 testStatement :: String -> Either ParseError Statement
 testStatement = parse statement "statementTest"
 
-testText :: String
-testText = "void hello(int a, char b) { int a = 2; int b; b = 3; }"
-
 spaced :: Parser a -> Parser a
 spaced = between (try spaces) (try spaces)
 
@@ -306,7 +302,9 @@ inParens = between (char '(') (char ')')
 
 atomic :: Parser Atomic
 atomic = spaced $ choice [ functionCall
-                         , identifierExpression
+                         , identifierAtomic
+                         , charLiteral
+                         , stringLiteral
                          , integerLiteral
                          , floatLiteral
                          ]
@@ -321,8 +319,8 @@ functionCall =
      char ')'
      return $ FunctionCall name arguments
 
-identifierExpression :: Parser Atomic
-identifierExpression = IdentifierAtomic <$> identifier
+identifierAtomic :: Parser Atomic
+identifierAtomic = IdentifierAtomic <$> identifier
 
 integerSign :: Parser Signed
 integerSign = signed <|> unsigned <|> return Signed
@@ -344,6 +342,43 @@ integerLiteral =
        _           -> return integerType'
      return $ IntegerLiteral (read num) integerType'' sign
   <?> "integer literal"
+
+parseQuotedChar :: [Char] -> [(Char, Char)] -> Parser Char
+parseQuotedChar disallowedChars escapeTable =
+  normalCharP <|> escapeCharP
+  where normalCharP         = choice $ map (try . char) allowedChars
+        allowedChars        = filter (not . (`elem`disallowedChars)) [minBound..]
+        escapeCharP         = choice $ map escapeChar escapeTable
+        escapeChar :: (Char, Char) -> Parser Char
+        escapeChar (c, res) = try $ do char '\\'
+                                       char c
+                                       return res
+
+universalEscapeTable :: [(Char, Char)]
+universalEscapeTable = [ ('n', '\n')
+                       , ('\\', '\\')
+                       ]
+
+universalDisallowedChars :: [Char]
+universalDisallowedChars = ['\n', '\\']
+
+charLiteral :: Parser Atomic
+charLiteral =
+  do char '\''
+     character <- parseQuotedChar disallowedChars escapeTable
+     char '\''
+     return $ CharLiteral character
+  where escapeTable     = ('\'', '\'') : universalEscapeTable
+        disallowedChars = '\'' : universalDisallowedChars
+
+stringLiteral :: Parser Atomic
+stringLiteral =
+  do char '"'
+     characters <- many $ parseQuotedChar disallowedChars escapeTable
+     char '"'
+     return $ StringLiteral characters
+  where escapeTable     = ('\"', '\"') : universalEscapeTable
+        disallowedChars = '\"' : universalDisallowedChars
 
 floatLiteral :: Parser Atomic
 floatLiteral =
