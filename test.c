@@ -6,11 +6,22 @@ int kanske(int a) {
 
 int main(int cc, char** vc) {
 
-  int a = 0;
-  int b = 1;
+  int a = 0; // Hello
+  int b = // ok??
+      1;
   int N = 10;
+  char* hej = "okk????";
+  char* varfor = "men varför på riktigt????";
+  /*
+    hello world
+    asså jag är inte säker
+*/
 
-  for (int i = 0 ; i < N ; i++) {
+  for (int i = 0; // Nja
+/*
+         nja
+*/
+       i < N ; i++) {
     printf(a);
     b += a;
     a = b - a;

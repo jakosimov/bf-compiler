@@ -4,7 +4,7 @@ cabal-version: 1.12
 --
 -- see: https://github.com/sol/hpack
 --
--- hash: 440ac3fa7e3ff5147c4f6c5de1d46ad7c266bd32425c6d41a8406bec57f119ad
+-- hash: 14e60a0c68f6e635f0029e88adda02375542789d337882b67f077f0f98147cd6
 
 name:           bf-compiler
 version:        0.1.0.0
@@ -27,7 +27,6 @@ source-repository head
 
 library
   exposed-modules:
-      Compile
       Lib
       Parsing
   other-modules:
