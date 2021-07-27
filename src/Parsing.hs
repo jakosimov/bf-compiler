@@ -268,8 +268,42 @@ testExpr = parse expression "expressionTest"
 testStatement :: String -> Either ParseError Statement
 testStatement = parse statement "statementTest"
 
+singleLineComment :: Parser ()
+singleLineComment =
+  do try $ string "//"
+     many allowedChar
+     char '\n'
+     return ()
+  where allowedChar = noneOf ['\n']
+
+multiLineComment :: Parser ()
+multiLineComment =
+  do try $ string "/*"
+     many commentChar
+     string "*/"
+     return ()
+  where commentChar =
+          noneOf ['*'] <|> try (char '*' >> noneOf ['/'])
+
+comment :: Parser ()
+comment = between spaces spaces $ singleLineComment <|> multiLineComment
+
+emptySpace :: Parser ()
+emptySpace = do spaces
+                many comment
+                return ()
+
+emptySpace1 :: Parser ()
+emptySpace1 = do start <- (True <$ many1 space) <|> return False
+                 comments <- (True <$ many1 comment) <|> return False
+                 end <- (True <$ many1 space) <|> return False
+                 if start || comments || end then
+                   return ()
+                 else
+                   fail "whitespace delimiter"
+
 spaced :: Parser a -> Parser a
-spaced = between (try spaces) (try spaces)
+spaced = between (try emptySpace) (try emptySpace)
 
 identifierStartLetter :: Parser Char
 identifierStartLetter = letter <|> char '_'
@@ -289,13 +323,13 @@ identifier = fmap Identifier legalIdentifier <?> "identifier"
 dataType :: Parser DataType
 dataType =
   do unsigned <- orEmpty $ do res <- string "unsigned"
-                              many1 space
+                              emptySpace1
                               return $ res ++ " "
      firstLong <- orEmpty $ do res <- string "long"
-                               many1 space
+                               emptySpace1
                                return $ res ++ " "
      secondLong <- orEmpty $ do res <- string "long"
-                                many1 space
+                                emptySpace1
                                 return $ res ++ " "
      dataType <- legalIdentifier
      return $ DataType $ unsigned ++ firstLong ++ secondLong ++ dataType
@@ -326,7 +360,7 @@ atomic = spaced $ choice [ functionCall
 functionCall :: Parser Atomic
 functionCall =
   do name <- try $ do name <- identifier
-                      spaces
+                      emptySpace
                       char '('
                       return name
      arguments <- commaSep expression
@@ -360,8 +394,7 @@ integerLiteral =
 parseQuotedChar :: [Char] -> [(Char, Char)] -> Parser Char
 parseQuotedChar disallowedChars escapeTable =
   normalCharP <|> escapeCharP
-  where normalCharP         = choice $ map (try . char) allowedChars
-        allowedChars        = filter (not . (`elem`disallowedChars)) [minBound..]
+  where normalCharP         = noneOf disallowedChars
         escapeCharP         = choice $ map escapeChar escapeTable
         escapeChar :: (Char, Char) -> Parser Char
         escapeChar (c, res) = try $ do char '\\'
@@ -550,7 +583,7 @@ assignmentRightHand :: Parser Expression
 assignmentRightHand =
   do try $ spaced $ char '='
      result <- expression
-     spaces
+     emptySpace
      return result
 
 wrapTypeInPointer :: DataType -> Int -> DataType
@@ -559,16 +592,16 @@ wrapTypeInPointer d n = PointerType $ wrapTypeInPointer d (n-1)
 
 pointerAsterisks :: Parser [Char]
 pointerAsterisks = many asterix
-  where asterix = try $ do spaces
+  where asterix = try $ do emptySpace
                            c <- char '*'
-                           spaces
+                           emptySpace
                            return '*'
 
 declarationVariable :: DataType -> Parser VariableDeclaration
 declarationVariable dataType =
-  do (asterisks, name) <- try $ do spaces
+  do (asterisks, name) <- try $ do emptySpace
                                    asterisks <- pointerAsterisks
-                                   spaces
+                                   emptySpace
                                    name <- identifier
                                    return (asterisks, name)
      let fullType = wrapTypeInPointer dataType (length asterisks)
@@ -578,7 +611,7 @@ declarationVariable dataType =
 variableDeclaration :: Parser [VariableDeclaration]
 variableDeclaration =
   do varType <- dataType
-     spaces
+     emptySpace
      commaSep1 (declarationVariable varType)
   <?> "variable declaration"
 
@@ -586,35 +619,35 @@ variableDeclaration =
 declarationStatement :: Parser Statement
 declarationStatement =
   do result <- try variableDeclaration
-     spaces
+     emptySpace
      semicolon
      return $ DeclarationStatement result
 
 expressionStatement :: Parser Statement
 expressionStatement =
   do result <- expression
-     spaces
+     emptySpace
      semicolon
      return $ ExpressionStatement result
 
 returnStatement :: Parser Statement
 returnStatement =
   do try $ string "return"
-     spaces
+     emptySpace
      result <- optionMaybe expression
-     spaces
+     emptySpace
      semicolon
      return $ ReturnStatement result
 
 condition :: Parser Expression
-condition = between spaces spaces $ inParens expression
+condition = between emptySpace emptySpace $ inParens expression
 
 ifStatement :: Parser Statement
 ifStatement =
   do try $ string "if"
      expr <- condition
      statements <- body
-     spaces
+     emptySpace
      return $ IfStatement expr statements
 
 elseIfStatement :: Parser Statement
@@ -622,15 +655,15 @@ elseIfStatement =
   do try $ string "else if"
      expr <- condition
      statements <- body
-     spaces
+     emptySpace
      return $ ElseIfStatement expr statements
 
 elseStatement :: Parser Statement
 elseStatement =
   do try $ string "else"
-     spaces
+     emptySpace
      statements <- body
-     spaces
+     emptySpace
      return $ ElseStatement statements
 
 whileStatement :: Parser Statement
@@ -638,7 +671,7 @@ whileStatement =
   do try $ string "while"
      expr <- condition
      statements <- body
-     spaces
+     emptySpace
      return $ WhileStatement expr statements
 
 forInitializer :: Parser ForInitializer
@@ -657,7 +690,7 @@ forClause = expressionClause <|> return EmptyClause <?> "for clause"
 forStatement :: Parser Statement
 forStatement =
   do try $ string "for"
-     spaces
+     emptySpace
      char '('
      init <- spaced forInitializer
      semicolon
@@ -682,11 +715,11 @@ fullType =
 
 functionParameter :: Parser Parameter
 functionParameter =
-  do spaces
+  do emptySpace
      valueType <- fullType
-     spaces
+     emptySpace
      name <- identifier
-     spaces
+     emptySpace
      return $ Parameter valueType name
 
 functionParameters :: Parser [Parameter]
@@ -699,11 +732,11 @@ body = between (char '{') (char '}') $ many statement
 functionDefinition :: Parser FunctionDefinition
 functionDefinition =
   do returnType <- fullType
-     spaces
+     emptySpace
      functionName <- identifier
-     spaces
+     emptySpace
      parameters <- functionParameters
-     spaces
+     emptySpace
      functionBody <- body
      return FunctionDefinition { returnType
                                , functionName
@@ -725,14 +758,9 @@ testFile = "test.c"
 -- TODO: Fix preprocessors
 doPreprocessing :: String -> String
 doPreprocessing string =
-  unlines $ map (removeComments . removePreprocessors) ls
+  unlines $ map removePreprocessors ls
   where ls = lines string
         removePreprocessors = takeWhile (/='#')
-        removeComments = third . foldl helper (False, ' ', [])
-        third (_, _, x) = x
-        helper (True, _, xs) c       = (True, c, xs)
-        helper (False, '/', xs) '/'  = (True, '/', xs)
-        helper (False, _, xs) x      = (False, x, xs ++ [x])
 
 testParseFile :: String -> IO (String, Either ParseError SourceFile)
 testParseFile fileName =
