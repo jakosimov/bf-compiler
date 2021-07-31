@@ -14,7 +14,9 @@ module Parsing
   , Parameter (..)
   , FunctionDefinition (..)
   , SourceDeclaration (..)
+  , SourceFile (..)
   , sourceFile
+  , parseFile
   ) where
 
 import Text.Parsec
@@ -30,13 +32,13 @@ data DataType = DataType String
               | LongLongType DataType
               | LongType DataType
 
-newtype Identifier = Identifier String
+newtype Identifier = Identifier String deriving Eq
 
 data Signed = Signed | Unsigned
 data IntegerType = StandardInt | LongInt | LongLongInt
 data FloatType = FloatType | DoubleType
 
-data Atomic=
+data Atomic =
     FunctionCall Identifier [Expression]
   | IdentifierAtomic Identifier
   | CharLiteral Char
@@ -772,8 +774,8 @@ doPreprocessing string =
   where ls = lines string
         removePreprocessors = takeWhile (/='#')
 
-testParseFile :: String -> IO (String, Either ParseError SourceFile)
-testParseFile fileName =
+parseFile :: String -> IO (String, Either ParseError SourceFile)
+parseFile fileName =
   do handle <- openFile fileName ReadMode
      contents <- hGetContents handle
      forceList contents
@@ -785,7 +787,7 @@ testParseFile fileName =
 
 testOn :: IO ()
 testOn =
-  do (preprocessed, result) <- testParseFile testFile
+  do (preprocessed, result) <- parseFile testFile
      putStrLn "Preprocessed:"
      putStrLn preprocessed
      case result of
